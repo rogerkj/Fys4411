@@ -9,14 +9,21 @@ class MCIntegrator
 {
 public:
     MCIntegrator();
+    ~MCIntegrator();
 
-    void runMCIntegration();
+    double runMCIntegration(double _alpha, double _beta);
 
 private:
+
+    void quantumforce (const mat &r , mat &qforce ,double wf);
+
     double waveFunction(const mat &r);
     double jastrowFactor(const mat &r);
     double localEnergy(const mat &r);
     double localEnergyAnalytical(const mat &r);
+
+    mat r_old,r_new;
+    mat qforce_old,qforce_new;
 
     int nDimensions;
     int charge;
@@ -32,9 +39,12 @@ private:
     double beta;
 
     int nCycles;
+    
+    double timestep;
+    double D;
 
-    mat rOld;
-    mat rNew;
+    int  termiLim;
+
 };
 
 #endif // MCINTEGRATOR_H

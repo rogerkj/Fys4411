@@ -15,70 +15,151 @@ MCIntegrator:: MCIntegrator() :
     h(0.001),
     h2(1000000),
     idum(-1),
-    alpha(1.6),
-    beta(1.0),
-    nCycles(1000000)
+    alpha(2.0),
+    beta(1.2),
+    nCycles(1000000),
+    timestep(0.01),
+    D(0.5),
+    termiLim(100000)
 {
+
+  r_old  = zeros<mat>( nParticles , nDimensions );
+  r_new  = zeros<mat>( nParticles , nDimensions );
+
+  qforce_old  = zeros<mat>( nParticles , nDimensions );
+  qforce_new  = zeros<mat>( nParticles , nDimensions );
+
 }
 
-void MCIntegrator::runMCIntegration() {
+MCIntegrator::~MCIntegrator() {
 
-  double waveFunctionOld = 0;
-  double waveFunctionNew = 0;
+
+}
+
+double MCIntegrator::runMCIntegration(double _alpha, double _beta) {
+
+  alpha = _alpha;
+  beta = _beta;
 
   double energySum = 0;
   double energySquaredSum = 0;
 
-  double deltaE;
-
-  rOld = zeros<mat>( nParticles , nDimensions );
-  rNew = zeros<mat>( nParticles , nDimensions );
+  double deltaE = 0.0;
  
-  for ( int i = 0; i < nParticles ; i ++) {
-    for ( int j = 0; j < nDimensions ; j ++) {
-      rOld (i , j) = stepLength * ( ran2 (&idum) - 0.5) ;
-    }
-  }
 
-  rNew = rOld ; 
+  //Finne random start til r
+  r_old.randn();
+  r_old *= sqrt(timestep);
 
+  //Finne startverdi av bølgefunskjon og quantumforce
+  double wfold = waveFunction (r_old) ;
+  quantumforce(r_old , qforce_old , wfold ) ;
+   
+  r_new = r_old; 
+
+  //Antall Cycles
   for(int cycle = 0; cycle < nCycles; cycle++) {
-
-    // Store the current value of the wave function
-    waveFunctionOld = waveFunction(rOld);
 
     // New position to test
     for(int i = 0; i < nParticles; i++) {
-      for(int j = 0; j < nDimensions; j++) {
-	rNew(i,j) = rOld(i,j) + stepLength*(ran2(&idum) - 0.5);
+      for (int j =0; j < nDimensions ; j ++) {
+
+	  vec v = zeros<vec>(1);
+	  v.randn();
+
+	  r_new (i , j) = r_old(i, j) + v(0) * sqrt(timestep) + qforce_old(i, j) * timestep *D;
+	
+      }
+        
+
+      //Oppdatere matrisa
+      for ( int k = 0; k < nParticles ; k++) {
+	if ( k != i ) {
+	  for ( int j =0; j < nDimensions ; j ++) {
+	    r_new (k, j) = r_old( k, j);
+	  }
+	}
+      }     
+
+      //Finne bølgefunsjon og quantumforce
+      double wfnew = waveFunction (r_new) ;
+      quantumforce ( r_new , qforce_new , wfnew) ;
+      
+      //Finne greensfunkjsonen
+      double greensfunction = 0.0 ;
+      for ( int j = 0; j < nDimensions ; j ++) {
+	greensfunction += 0.5 *( qforce_old( i, j) + qforce_new( i, j)) *
+	  (D*timestep * 0.5 * (  qforce_old( i, j) - qforce_new( i, j)) - r_new(i, j) + r_old(i, j)) ;
       }
 
-      // Recalculate the value of the wave function
-      waveFunctionNew = waveFunction(rNew);
+      greensfunction = exp ( greensfunction ) ;
 
-      // Check for step acceptance (if yes, update position, if no, reset position)
-      if(ran2(&idum) <= (waveFunctionNew*waveFunctionNew) / (waveFunctionOld*waveFunctionOld)) {
-	for(int j = 0; j < nDimensions; j++) {
-	  rOld(i,j) = rNew(i,j);
-	  waveFunctionOld = waveFunctionNew;
+      //Random test
+      if( ran2(&idum) <= greensfunction * wfnew * wfnew / wfold / wfold ) {
+	//Ny posisjon
+	for ( int j =0; j < nDimensions ; j ++) {
+	  r_old( i, j) = r_new(i, j) ;
+	  qforce_old(i, j) = qforce_new(i, j) ;
 	}
-      } else {
+	
+	wfold = wfnew ;
+      } 
+      /*
+      else {      
 	for(int j = 0; j < nDimensions; j++) {
-	  rNew(i,j) = rOld(i,j);
+	  r_new(i,j) = r_old(i,j);
 	}
       }
-      // update energies
-      deltaE = localEnergyAnalytical(rNew);
-      energySum += deltaE;
-      energySquaredSum += deltaE*deltaE;
+      */
+
+      //Kutte for terminalisering
+      if(cycle >=  termiLim) {
+      
+	// update energies
+	deltaE = localEnergyAnalytical(r_new);
+	energySum += deltaE;
+	energySquaredSum += deltaE*deltaE;
+      }
+
     }
   }
-  double energy = energySum/(nCycles * nParticles);
-  double energySquared = energySquaredSum/(nCycles * nParticles);
+  //Finne og plotte resultat
+  double energy = energySum/((nCycles -  termiLim) * nParticles);
+  double energySquared = energySquaredSum/((nCycles -  termiLim) * nParticles);
   cout << "Energy: " << energy << " Energy (squared sum): " << energySquared << endl;
-          
+  
+  return energy;
+        
 }
 
+//Finner verdi for quantum force. Numerisk versjon.
+void MCIntegrator::quantumforce (const mat &r , mat &qforce ,double wf ) {
+
+  double wfminus , wfplus ;
+  mat r_plus  = zeros<mat>( nParticles , nDimensions );
+  mat r_minus = zeros<mat>( nParticles , nDimensions );
+
+  r_plus = r_minus = r;
+
+  // compute the firstderivative
+  for ( int i = 0; i <  nParticles ; i ++) {
+    for ( int j = 0; j <  nDimensions ; j ++) {
+      r_plus(i, j) =  r(i, j) + h;
+      r_minus(i, j) = r(i, j) - h;
+
+      wfminus =  waveFunction(r_minus);
+      wfplus =  waveFunction(r_plus);
+
+      qforce(i, j) = (wfplus - wfminus) * 2.0 / wf / (2.0 * h);
+    
+      r_plus(i, j) = r(i, j) ;
+      r_minus( i, j) = r(i, j) ;
+    }
+  }
+} // end of quantum force function
+
+
+//Bølgefunskjonen 
 double MCIntegrator::waveFunction(const mat &r) {
 
     double argument = 0;
@@ -92,6 +173,7 @@ double MCIntegrator::waveFunction(const mat &r) {
     return exp(-argument * alpha) * jastrowFactor(r);
 }
 
+//Jastrow faktor
 double MCIntegrator::jastrowFactor(const mat &r) {
 
     rowvec r12 = r.row(1) - r.row(0);
@@ -99,20 +181,11 @@ double MCIntegrator::jastrowFactor(const mat &r) {
     return exp(r12norm / (2 * (1 + beta * r12norm)));
 }
 
-
+//Local energy analytical version
 double MCIntegrator::localEnergyAnalytical(const mat &r) {
-  /*
-  double lngd1 = 0;
-  double lngd2 = 0;
-  double lngd12 = 0;
-  for(int j = 0; j < nDimensions; j++) {
-    lngd1 += r(0,j) * r(0,j);
-    lngd2 += r(1,j) * r(1,j);
-    lngd12 = (r(1,j) - r(0,j))*(r(1,j) - r(0,j));
-  }
-  */
-  double r1 = norm(r.row(0),2);//sqrt(lngd1);
-  double r2 = norm(r.row(1),2);//sqrt(lngd2);
+
+  double r1 = norm(r.row(0),2);
+  double r2 = norm(r.row(1),2);
 
   double r12 = norm(r.row(1) - r.row(0),2);
 
@@ -129,6 +202,7 @@ double MCIntegrator::localEnergyAnalytical(const mat &r) {
 
 }
 
+//Local energy numerisk versjon
 double MCIntegrator::localEnergy(const mat &r) {
 
     mat rPlus = zeros<mat>(nParticles, nDimensions);
